@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# adb-qr-pair — pair an Android device for wireless debugging from the terminal.
+#
+#   QR mode (default): prints a QR code. On the phone open
+#     Developer options → Wireless debugging → Pair device with QR code, and scan it.
+#   Code mode (-c):    on the phone choose "Pair device with pairing code";
+#     the script finds the device via mDNS and asks for the 6-digit code.
+#
+# Requires: adb (platform-tools ≥ 30) and, for QR mode, qrencode.
+# Host and phone must be on the same network (mDNS must not be blocked).
+
+set -euo pipefail
+
+TIMEOUT=120
+MODE=qr
+CONNECT=1
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [-c] [-t SECONDS] [-n]
+  -c          pairing-code mode instead of QR code
+  -t SECONDS  how long to wait for the device (default: $TIMEOUT)
+  -n          don't run 'adb connect' after pairing
+  -h          show this help
+EOF
+}
+
+while getopts "ct:nh" opt; do
+  case $opt in
+    c) MODE=code ;;
+    t) TIMEOUT=$OPTARG ;;
+    n) CONNECT=0 ;;
+    h) usage; exit 0 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+info() { printf '\e[36m›\e[0m %s\n' "$*"; }
+ok() { printf '\e[32m✔\e[0m %s\n' "$*"; }
+
+command -v adb >/dev/null || die "adb not found in PATH"
+[[ $MODE == qr ]] && { command -v qrencode >/dev/null || die "qrencode not found (install the 'qrencode' package)"; }
+
+adb start-server >/dev/null 2>&1 || true
+MDNS_OUT=$(adb mdns services 2>&1 || true)
+if [[ $MDNS_OUT == *"unknown host service"* ]]; then
+  die "the running adb server has no mDNS support (often a distro 'android-tools' build).
+  Run 'adb kill-server' and retry so the adb in your PATH ($(command -v adb)) starts a new server,
+  or set ADB_MDNS_OPENSCREEN=1 before starting it."
+fi
+
+# Print "<ip:port>" of the first discovered service matching type (and optional name).
+find_service() { # $1=service type, $2=instance name (optional)
+  adb mdns services 2>/dev/null | awk -v t="$1" -v n="${2:-}" '
+    $0 ~ t && (n == "" || $1 == n) { print $NF; exit }'
+}
+
+wait_for_service() { # $1=type, $2=name (optional); echoes ip:port
+  local deadline=$((SECONDS + TIMEOUT)) addr spin='|/-\' i=0
+  while ((SECONDS < deadline)); do
+    addr=$(find_service "$1" "${2:-}")
+    if [[ -n $addr ]]; then printf '\r\e[K' >&2; echo "$addr"; return 0; fi
+    printf '\r  waiting for device %s (%ds left) ' "${spin:i++%4:1}" $((deadline - SECONDS)) >&2
+    sleep 1
+  done
+  printf '\r\e[K' >&2
+  return 1
+}
+
+rand() { local s; s=$(set +o pipefail; LC_ALL=C tr -dc "$1" </dev/urandom 2>/dev/null | head -c "$2"); echo "$s"; }
+
+if [[ $MODE == qr ]]; then
+  NAME="adb-qr-$(rand 'a-z0-9' 8)"
+  PASS="$(rand 'A-Za-z0-9' 12)"
+  echo
+  qrencode -t ANSIUTF8 -m 2 "WIFI:T:ADB;S:${NAME};P:${PASS};;"
+  echo
+  info "Phone: Developer options → Wireless debugging → Pair device with QR code"
+  info "Service: $NAME"
+  ADDR=$(wait_for_service "_adb-tls-pairing._tcp" "$NAME") || die "timed out waiting for the device to scan the QR code"
+else
+  info "Phone: Developer options → Wireless debugging → Pair device with pairing code"
+  ADDR=$(wait_for_service "_adb-tls-pairing._tcp") || die "timed out; no device advertising a pairing service"
+  info "Found pairing service at $ADDR"
+  read -rp "  Enter the 6-digit pairing code: " PASS
+  [[ $PASS =~ ^[0-9]{6}$ ]] || die "pairing code must be 6 digits"
+fi
+
+info "Pairing with $ADDR ..."
+OUT=$(adb pair "$ADDR" "$PASS" 2>&1) || true
+echo "  $OUT"
+grep -qi "successfully paired" <<<"$OUT" || die "pairing failed"
+ok "Paired"
+
+if ((CONNECT)); then
+  HOST=${ADDR%:*}
+  # The phone usually auto-connects after QR pairing; otherwise find its connect port.
+  sleep 2
+  DEVS=$(adb devices)
+  if grep -q "^${HOST}:" <<<"$DEVS"; then
+    ok "Connected: $(adb devices | awk -v h="$HOST" 'index($1,h":")==1{print $1; exit}')"
+  else
+    CADDR=$( (adb mdns services 2>/dev/null | awk -v h="$HOST" '/_adb-tls-connect/ && index($NF,h":")==1 {print $NF; exit}') )
+    if [[ -n $CADDR ]]; then
+      adb connect "$CADDR" && ok "Connected: $CADDR"
+    else
+      info "Paired, but couldn't find the connect port. Run: adb connect $HOST:<port shown under Wireless debugging>"
+    fi
+  fi
+fi
