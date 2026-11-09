@@ -60,3 +60,7 @@ Restarting the server disconnects every device connected at that moment.
 **Timed out waiting for the device**: the phone and the computer must be on the same network. Some guest, office and VPN networks block mDNS. Check that `adb mdns services` lists the phone while its pairing screen is open.
 
 **Paired, but couldn't find the connect port**: run `adb connect <phone-ip>:<port>` yourself, using the IP address and port shown on the **Wireless debugging** screen.
+
+## License
+
+[MIT](LICENSE)
