@@ -49,13 +49,13 @@ After pairing, the script checks whether the phone has already connected. If not
 
 ## Troubleshooting
 
-**`the running adb server has no mDNS support`**: the running adb server was started by an adb build without mDNS, often a distro `android-tools` package. Restart the server so that the SDK's adb starts it:
+**`The running adb server has no mDNS support`**: the running adb server was started by an adb build without mDNS, often a distro `android-tools` package. When run in a terminal, the script names the binary that started the server and lists the adb binaries it finds in `PATH` and the usual SDK locations, marking distro builds. Pick one, or `o` to also set `ADB_MDNS_OPENSCREEN=1`. The script restarts the server with it and checks mDNS again. When not run in a terminal, it exits with an error. In that case, restart the server yourself so that the SDK's adb starts it:
 
 ```bash
 adb kill-server && adb-qr-pair
 ```
 
-Restarting the server disconnects every device connected at that moment.
+Restarting the server disconnects every device connected at that moment. The script warns you before doing so.
 
 **Timed out waiting for the device**: the phone and the computer must be on the same network. Some guest, office and VPN networks block mDNS. Check that `adb mdns services` lists the phone while its pairing screen is open.
 
